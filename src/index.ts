@@ -8,66 +8,93 @@ const PORT = 3000;
 
 const CACHE_DIR = path.join(__dirname, 'cache');
 
+class Cache {
+    private hashRes(url: string): string {
+        const key = 'GET ' + url;
+        return crypto.createHash('sha256').update(key).digest('hex');
+    }
 
-function hashRes(url: string) {
-    const key = 'GET ' + url;
-    return crypto.createHash('sha256').update(key).digest('hex');
-}
+    public async cacheJson(requestUrl: string, jsonData: any): Promise<void> {
+        const hash = this.hashRes(requestUrl);
+        const filePath = path.join(CACHE_DIR, `${hash}.json`);
 
-async function cacheJson(requestUrl: string, jsonData: any): Promise<void> {
-    const hash = hashRes(requestUrl);
-    const filePath = path.join(CACHE_DIR, `${hash}.json`);
-  
-    await fs.mkdir(CACHE_DIR, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2), 'utf-8');
-}
+        await fs.mkdir(CACHE_DIR, { recursive: true });
+        await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2), 'utf-8');
+    }
 
-async function peekCache(requestUrl: string): Promise<boolean> {
-    const hash = hashRes(requestUrl);
-    const filePath = path.join(CACHE_DIR, `${hash}.json`);
+    public async peekCache(requestUrl: string): Promise<boolean> {
+        const hash = this.hashRes(requestUrl);
+        const filePath = path.join(CACHE_DIR, `${hash}.json`);
 
-    try {
-        await fs.access(filePath);
-        return true;
-    } catch {
-        return false;
+        try {
+            await fs.access(filePath);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    public async getCached(requestUrl: string): Promise<any | null> {
+        const hash = this.hashRes(requestUrl);
+        const filePath = path.join(CACHE_DIR, `${hash}.json`);
+
+        try {
+            const data = await fs.readFile(filePath, 'utf-8');
+            return JSON.parse(data);
+        } catch {
+            return null;
+        }
     }
 }
 
-async function getCached(requestUrl: string): Promise<any | null> {
-    const hash = hashRes(requestUrl);
-    const filePath = path.join(CACHE_DIR, `${hash}.json`);
-  
-    try {
-      const data = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(data);
-    } catch {
-      return null;
-    }
-  }
-  
+function respond(res: express.Response, path: string, data: any) {
+    res.json({
+        message: "im back",
+        matchedPath: path,
+        apiResponse: data
+    });
+}
+
+async function handleAPICall(path: string, method: string, body?: any): Promise<any> {
+    const options: RequestInit = {
+        method,
+        headers: body ? { "Content-Type": "application/json; charset=UTF-8" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+    };
+
+    const response = await fetch(`https://jsonplaceholder.typicode.com${path}`, options);
+
+    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+
+    return response.json();
+}
+
+
+
+let _cache = new Cache;
 
 app.use(express.json());
 
 app.all("*", async (req, res): Promise<void> => {
 
 
- 
-    let cache: Boolean = false;
+
+    let cache: boolean = false;
     const path = req.path;
 
+    if (req.path === "/favicon.ico") {
+        res.status(204).end();
+        return;
+    }
 
     if (req.method == 'GET') {
-        
-        if (await peekCache(path)) {
 
-            const data = await getCached(path)
+        if (await _cache.peekCache(path)) {
 
-            res.json({
-                message: "im back",
-                matchedPath: path,
-                apiResponse: data
-            });
+            const data = await _cache.getCached(path)
+
+            respond(res, path, data);
+            return;
         }
         cache = true;
 
@@ -75,55 +102,18 @@ app.all("*", async (req, res): Promise<void> => {
 
     const isValidJson = req.headers["content-type"] === "application/json" && (req.body && Object.keys(req.body).length > 0);
 
-    if (req.path === "/favicon.ico") {
-        res.status(204).end();
-        return;
-    }
 
 
     console.log(`request to ${path}`);
 
     try {
-        if (isValidJson) {
-            let fetchOptions: RequestInit = { method: req.method };
-            fetchOptions = {
-                ...fetchOptions,
-                headers: { "Content-Type": "application/json; charset=UTF-8" },
-                body: JSON.stringify(req.body),
-            };
-            const response = await fetch(`https://jsonplaceholder.typicode.com${path}`, fetchOptions);
+        const data = await handleAPICall(path, req.method, isValidJson ? req.body : undefined);
 
-            const data = await response.json();
-
-            if (cache && req.method == 'GET') {
-                cacheJson(path, data);
-            }
-
-            res.json({
-                message: "im back",
-                matchedPath: path,
-                apiResponse: data
-            });
-            return;
+        if (cache && req.method === 'GET') {
+            await _cache.cacheJson(path, data);
         }
 
-        const response = await fetch(`https://jsonplaceholder.typicode.com${path}`);
-
-        if (!response.ok) {
-            throw new Error(`HTTP Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (cache && req.method == 'GET') {
-            cacheJson(path, data);
-        }
-
-        res.json({
-            message: "im back",
-            matchedPath: path,
-            apiResponse: data
-        });
+        respond(res, path, data);
 
     } catch (error) {
         if (error instanceof Error) {
