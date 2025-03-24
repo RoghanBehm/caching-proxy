@@ -1,51 +1,28 @@
 import express from "express";
-import crypto from "crypto";
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import { Cache } from "./Cache";
 
 const app = express();
-const PORT = 3000;
+const args = process.argv.slice(2);
 
-const CACHE_DIR = path.join(__dirname, 'cache');
+ // Default values
+let PORT: number = 3000;
+let URL: string = 'https://jsonplaceholder.typicode.com';
+const _cache = new Cache();
 
-class Cache {
-    private hashRes(url: string): string {
-        const key = 'GET ' + url;
-        return crypto.createHash('sha256').update(key).digest('hex');
+args.forEach((arg: string, index: number) => {
+    if (arg == '--port') {
+        PORT = parseInt(args[index + 1]);
     }
 
-    public async cacheJson(requestUrl: string, jsonData: any): Promise<void> {
-        const hash = this.hashRes(requestUrl);
-        const filePath = path.join(CACHE_DIR, `${hash}.json`);
-
-        await fs.mkdir(CACHE_DIR, { recursive: true });
-        await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2), 'utf-8');
+    if (arg == '--origin') {
+        URL = args[index+1];
     }
 
-    public async peekCache(requestUrl: string): Promise<boolean> {
-        const hash = this.hashRes(requestUrl);
-        const filePath = path.join(CACHE_DIR, `${hash}.json`);
-
-        try {
-            await fs.access(filePath);
-            return true;
-        } catch {
-            return false;
-        }
+    if (arg == '--clear-cache') {
+        _cache.clearCache();
     }
+})
 
-    public async getCached(requestUrl: string): Promise<any | null> {
-        const hash = this.hashRes(requestUrl);
-        const filePath = path.join(CACHE_DIR, `${hash}.json`);
-
-        try {
-            const data = await fs.readFile(filePath, 'utf-8');
-            return JSON.parse(data);
-        } catch {
-            return null;
-        }
-    }
-}
 
 function respond(res: express.Response, path: string, data: any) {
     res.json({
@@ -62,7 +39,7 @@ async function handleAPICall(path: string, method: string, body?: any): Promise<
         body: body ? JSON.stringify(body) : undefined,
     };
 
-    const response = await fetch(`https://jsonplaceholder.typicode.com${path}`, options);
+    const response = await fetch(`${URL}${path}`, options);
 
     if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
@@ -71,7 +48,6 @@ async function handleAPICall(path: string, method: string, body?: any): Promise<
 
 
 
-let _cache = new Cache;
 
 app.use(express.json());
 
@@ -129,5 +105,6 @@ app.all("*", async (req, res): Promise<void> => {
 
 app.listen(PORT, () => {
     console.log(`running on port ${PORT}`);
+    console.log(`origin: ${URL}`)
 });
 
